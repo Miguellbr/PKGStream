@@ -140,7 +140,7 @@ async function handleStream(req, res, url) {
   let end = total - 1;
 
   if (range) {
-    const match = range.match(/^bytes=(\\d*)-(\\d*)$/);
+    const match = range.match(/^bytes=(\d*)-(\d*)$/);
     if (!match) {
       res.writeHead(416, { "content-range": `bytes */${total}` });
       return res.end();
@@ -226,7 +226,8 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         ok: true,
         service: "PKGStream",
-        root: ROOT
+        root: ROOT,
+        remoteRar: true
       });
     }
 
