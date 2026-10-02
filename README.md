@@ -2,48 +2,103 @@
 
 Generic HTTP streaming server for files contained in local archives.
 
-## Goal
+## Current MVP
 
-PKGStream exposes a selected file inside an archive through HTTP without creating a full extracted copy on disk.
+- recursively list archive entries;
+- expose a selected entry through HTTP;
+- stream without creating an extracted copy on disk;
+- keep the transfer bounded by Node HTTP backpressure;
+- implement single-range HTTP requests (206 Partial Content);
+- support RAR/ZIP/7z through an installed 7zz, 7z, or unrar executable;
+- restrict archive paths to a configured root directory.
 
-Initial architecture:
+For compressed entries, a non-zero HTTP range currently starts the decoder from the beginning and discards bytes until the requested offset. This is correct but not yet optimized for random access.
+
+## Architecture
 
 ```
-archive
-  ↓
-archive index
-  ↓
-selected entry
-  ↓
-bounded streaming pipeline
-  ↓
-HTTP response
+local archive
+     |
+     v
+archive backend (7zz / 7z / unrar)
+     |
+     +---- list entries
+     |
+     +---- decode selected entry
+                  |
+                  v
+             HTTP server
+                  |
+             GET + Range
 ```
 
-The project is intentionally generic: it does not provide a content catalog, search engine, or links to third-party copyrighted material.
+The archive is never fully extracted by PKGStream. Decoded bytes flow through the process pipe directly into the HTTP response.
 
-## Design requirements
-
-- Recursive archive entry listing.
-- Stream a selected entry instead of extracting the complete archive.
-- Keep memory bounded with backpressure.
-- HTTP `HEAD` and `GET`.
-- Correct HTTP Range handling where the archive backend can support it.
-- Support large files without requiring a second full copy on disk.
-- Keep archive decoding separate from the HTTP server.
-
-## Archive backend
-
-RAR support is being developed as a separate backend. The Node ecosystem has RAR implementations, but several common libraries either materialize the whole input or the extracted entry, which does not satisfy PKGStream's bounded-memory goal. The backend therefore needs to be chosen/implemented around incremental reads rather than simply calling an API that returns a complete Uint8Array.
-
-## Development
+## Setup
 
 Node.js 20+ is recommended.
 
+Install an archive extractor available on your platform:
+
+- `7zz` or `7z` for RAR/ZIP/7z
+- `unrar` for RAR
+
+Then:
+
 ```bash
 npm install
+mkdir -p archives
+npm test
+PKGSTREAM_ROOT=./archives npm start
+```
+
+Put a test archive you are authorized to use inside `archives/`.
+
+## API
+
+### List
+
+```
+GET /list?archive=test.rar
+```
+
+Returns archive entries and their sizes when the backend provides them.
+
+### Stream
+
+```
+GET /stream?archive=test.rar&entry=folder/file.bin
+```
+
+The response supports Content-Length, Accept-Ranges, Range, 206 Partial Content, and 416 Range Not Satisfiable.
+
+### Health
+
+```
+GET /health
+```
+
+## Security model
+
+The server does not accept arbitrary filesystem paths. archive= is resolved underneath PKGSTREAM_ROOT.
+
+The project has no content catalog, search service, or third-party content source. It is a generic transport/extraction component for files the operator is authorized to access and transmit.
+
+## Roadmap
+
+1. RAR/ZIP/7z backend abstraction — done
+2. HTTP streaming — done
+3. HTTP Range — done
+4. Recursive entry selection — done
+5. Multipart RAR sets
+6. Remote HTTP archive source with ranged reads
+7. Native incremental RAR backend, removing the external extractor requirement
+8. Efficient random-access Range support
+9. Android UI / local network discovery
+
+## Development
+
+```bash
 npm test
 npm start
 ```
-
-Use only archives and files you are authorized to access and transmit.
