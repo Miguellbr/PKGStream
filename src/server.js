@@ -242,8 +242,16 @@ const server = http.createServer(async (req, res) => {
 
     return sendJson(res, 404, { error: "Not found" });
   } catch (error) {
-    const status = error.statusCode || 500;
-    return sendJson(res, status, { error: error.message });
+    console.error("[PKGStream]", error);
+    if (res.headersSent || res.writableEnded) {
+      res.destroy(error);
+      return;
+    }
+    const status = Number.isInteger(error.statusCode) ? error.statusCode : 502;
+    return sendJson(res, status, {
+      error: error?.message || String(error),
+      name: error?.name || "Error"
+    });
   }
 });
 
