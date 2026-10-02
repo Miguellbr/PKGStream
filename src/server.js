@@ -232,12 +232,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/list" && (req.method === "GET" || req.method === "HEAD")) {
-      return handleList(url, res);
+      return await handleList(url, res);
     }
 
     if (url.pathname === "/stream" && (req.method === "GET" || req.method === "HEAD")) {
-      if (getRemoteSources(url).length) return handleRemoteStream(req, res, url);
-      return handleStream(req, res, url);
+      if (getRemoteSources(url).length) return await handleRemoteStream(req, res, url);
+      return await handleStream(req, res, url);
     }
 
     return sendJson(res, 404, { error: "Not found" });
