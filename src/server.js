@@ -8,6 +8,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8080);
 const ROOT = path.resolve(process.env.PKGSTREAM_ROOT || "./archives");
 const RAR_PASSWORD = process.env.PKGSTREAM_RAR_PASSWORD || undefined;
+const ALLOW_REMOTE = process.env.PKGSTREAM_ALLOW_REMOTE === "1";
 
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
@@ -92,6 +93,7 @@ async function streamWebEntry(req, res, total, body, cleanup = async () => {}) {
 }
 
 async function handleRemoteList(url, res) {
+  if (!ALLOW_REMOTE) return sendJson(res, 403, { error: "Remote sources are disabled. Set PKGSTREAM_ALLOW_REMOTE=1 to enable them." });
   const sources = getRemoteSources(url);
   if (!sources.length) return null;
   const entries = await listRemoteRar(sources, { password: RAR_PASSWORD });
@@ -99,6 +101,7 @@ async function handleRemoteList(url, res) {
 }
 
 async function handleRemoteStream(req, res, url) {
+  if (!ALLOW_REMOTE) return sendJson(res, 403, { error: "Remote sources are disabled. Set PKGSTREAM_ALLOW_REMOTE=1 to enable them." });
   const sources = getRemoteSources(url);
   const entryPath = url.searchParams.get("entry");
   if (!sources.length) return sendJson(res, 400, { error: "Missing source parameter" });
