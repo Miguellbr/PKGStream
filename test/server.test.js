@@ -36,10 +36,10 @@ test("health endpoint", async () => {
     });
 
     assert.equal(body.status, 200);
-    assert.deepEqual(JSON.parse(body.data), {
-      ok: true,
-      service: "PKGStream"
-    });
+    const parsed = JSON.parse(body.data);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.service, "PKGStream");
+    assert.equal(parsed.remoteRar, true);
   } finally {
     child.kill();
   }
