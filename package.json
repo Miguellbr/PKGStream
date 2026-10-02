@@ -1,8 +1,8 @@
 {
   "name": "pkgstream",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Generic HTTP streaming server for files contained in archives",
+  "description": "Generic HTTP streaming server for files contained in local or remote archives",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -10,5 +10,8 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test"
+  },
+  "dependencies": {
+    "@mary/rar": "npm:@jsr/mary__rar@^0.2.2"
   }
 }
