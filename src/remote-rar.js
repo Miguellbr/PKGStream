@@ -6,9 +6,25 @@ function assertHttpUrl(value) {
   return url;
 }
 
+export async function resolveRemoteSource(value) {
+  const url = assertHttpUrl(value);
+  if (!/^(www\.)?mediafire\.com$/i.test(url.hostname)) return url.toString();
+
+  const response = await fetch(url, { redirect: "follow" });
+  if (!response.ok) throw new Error(`Remote source page returned HTTP ${response.status}`);
+  const html = await response.text();
+
+  const matches = [...html.matchAll(/https?:\\/\\/download\\d+\\.mediafire\\.com\\/[^"'<>\\s]+/gi)];
+  if (!matches.length) throw new Error("Could not resolve a direct MediaFire download URL");
+
+  return matches[0][0].replace(/&amp;/g, "&");
+}
+
 async function createReaders(urls) {
   if (!urls.length) throw new Error("Missing remote archive source");
-  return Promise.all(urls.map((value) => fromFetch({ input: assertHttpUrl(value) })));
+  const resolved = [];
+  for (const value of urls) resolved.push(await resolveRemoteSource(value));
+  return Promise.all(resolved.map((value) => fromFetch({ input: assertHttpUrl(value) })));
 }
 
 export async function listRemoteRar(urls, options = {}) {
@@ -33,5 +49,7 @@ export async function findRemoteRarEntry(urls, entryPath, options = {}) {
 }
 
 export async function closeRemoteRarIterator(iterator) {
-  if (iterator && typeof iterator.return === "function") { try { await iterator.return(); } catch {} }
+  if (iterator && typeof iterator.return === "function") {
+    try { await iterator.return(); } catch {}
+  }
 }
