@@ -14,7 +14,7 @@ export async function resolveRemoteSource(value) {
   if (!response.ok) throw new Error(`Remote source page returned HTTP ${response.status}`);
   const html = await response.text();
 
-  const matches = [...html.matchAll(/https?:\\/\\/download\\d+\\.mediafire\\.com\\/[^"'<>\\s]+/gi)];
+    const matches = [...html.matchAll(/https?:\/\/download\d+\.mediafire\.com\/[^"\'<>\s]+/gi)];
   if (!matches.length) throw new Error("Could not resolve a direct MediaFire download URL");
 
   return matches[0][0].replace(/&amp;/g, "&");
