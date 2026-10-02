@@ -34,13 +34,13 @@ function getRemoteSources(url) {
   const sources = url.searchParams.getAll("source");
   if (sources.length) return sources;
   const archive = url.searchParams.get("archive");
-  if (archive && /^https?:\\/\\//i.test(archive)) return [archive];
+  if (archive && /^https?:\/\//i.test(archive)) return [archive];
   return [];
 }
 
 function parseRange(range, total) {
   if (!range) return { start: 0, end: total - 1, partial: false };
-  const match = range.match(/^bytes=(\\d*)-(\\d*)$/);
+  const match = range.match(/^bytes=(\d*)-(\d*)$/);
   if (!match) return null;
   let start = 0, end = total - 1;
   if (match[1] === "") {
