@@ -102,3 +102,12 @@ The project has no content catalog, search service, or third-party content sourc
 npm test
 npm start
 ```
+
+
+## Remote RAR backend
+
+PKGStream can now read authorized RAR3/RAR4/RAR5 sources directly over HTTP/HTTPS using ranged reads. The backend uses `@mary/rar`, whose `fromFetch` reader is designed for ranged HTTP fetches and whose entries expose a streaming body. citeturn4view0
+
+List a remote archive with `GET /list?source=<URL>`. Stream a selected entry with `GET /stream?source=<URL>&entry=<path>`. Multipart sets can be supplied by repeating `source=` in volume order. Downstream HTTP Range is supported; a requested output range may still require decoding from the beginning of the selected entry.
+
+Install with `npm install`; the checked-in `.npmrc` configures JSR's npm compatibility registry for Node/npm. citeturn3search0turn3search3
