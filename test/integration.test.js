@@ -16,7 +16,7 @@ if (!sourceUrl) {
 
   function cacheKey() {
     return createHash("sha256")
-      .update(JSON.stringify({ sources: [source.toString()], entryPath: source.searchParams.get("entry") }))
+      .update(JSON.stringify({ sources: [source.searchParams.get("archive")], entryPath: source.searchParams.get("entry") }))
       .digest("hex");
   }
 
