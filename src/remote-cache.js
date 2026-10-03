@@ -142,7 +142,15 @@ export function startRemoteEntryMaterialization({ sources, entryPath, entry, ite
 
   state.promise = (async () => {
     await mkdir(CACHE_ROOT, { recursive: true });
-    await rm(partPath, { force: true });
+
+    let existingBytes = 0;
+    try {
+      existingBytes = (await stat(partPath)).size;
+      if (existingBytes > total) {
+        await rm(partPath, { force: true });
+        existingBytes = 0;
+      }
+    } catch {}
 
     const startedAt = performance.now();
     try {
@@ -151,8 +159,42 @@ export function startRemoteEntryMaterialization({ sources, entryPath, entry, ite
         throw new Error("RAR backend did not provide a readable entry body");
       }
 
-      const output = createWriteStream(partPath, { flags: "wx" });
-      await pipeline(Readable.fromWeb(body), output);
+      const output = createWriteStream(partPath, {
+        flags: existingBytes > 0 ? "a" : "w"
+      });
+
+      let skipped = 0;
+      try {
+        for await (const chunk of Readable.fromWeb(body)) {
+          let data = chunk;
+
+          if (skipped < existingBytes) {
+            const remaining = existingBytes - skipped;
+            if (data.length <= remaining) {
+              skipped += data.length;
+              continue;
+            }
+            data = data.subarray(remaining);
+            skipped = existingBytes;
+          }
+
+          if (data.length === 0) continue;
+
+          if (!output.write(data)) {
+            await new Promise((resolve, reject) => {
+              output.once("drain", resolve);
+              output.once("error", reject);
+            });
+          }
+        }
+      } finally {
+        output.end();
+        await new Promise((resolve, reject) => {
+          output.once("close", resolve);
+          output.once("error", reject);
+        });
+      }
+
       const written = (await stat(partPath)).size;
 
       if (written !== total) {
@@ -173,6 +215,7 @@ export function startRemoteEntryMaterialization({ sources, entryPath, entry, ite
       debugLog?.("remote entry cached", {
         entry: entryPath,
         size: total,
+        resumedFrom: existingBytes,
         ms: Math.round(performance.now() - startedAt)
       });
 
