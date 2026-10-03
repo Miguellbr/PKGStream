@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { mkdir, rename, rm, stat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { readEntryValue } from "./remote-rar.js";
 
 const CACHE_ROOT = path.resolve(process.env.PKGSTREAM_CACHE_ROOT || "./.pkgstream-cache");
 const CACHE_TTL_MS = Number(process.env.PKGSTREAM_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
@@ -67,7 +68,7 @@ export async function materializeRemoteEntry({ sources, entryPath, entry, iterat
     const startedAt = performance.now();
     let written = 0;
     try {
-      const body = entry.body();
+      const body = readEntryValue(entry, "body");
       if (!body || typeof body.getReader !== "function") {
         throw new Error("RAR backend did not provide a readable entry body");
       }
