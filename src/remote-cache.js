@@ -120,21 +120,27 @@ export async function getRemoteCache(sources, entryPath) {
   return readValidCache(sources, entryPath);
 }
 
-export async function materializeRemoteEntry({ sources, entryPath, entry, iterator, total, debugLog }) {
-  const existing = await readValidCache(sources, entryPath);
-  if (existing) {
-    await closeIterator(iterator);
-    return existing;
-  }
-
+export function startRemoteEntryMaterialization({ sources, entryPath, entry, iterator, total, debugLog }) {
   const { key, dataPath, metaPath, partPath } = pathsFor(sources, entryPath);
   const current = inflight.get(key);
   if (current) {
-    await closeIterator(iterator);
+    void closeIterator(iterator);
     return current;
   }
 
-  const promise = (async () => {
+  const state = {
+    key,
+    dataPath,
+    metaPath,
+    partPath,
+    size: total,
+    done: false,
+    error: null,
+    result: null,
+    promise: null
+  };
+
+  state.promise = (async () => {
     await mkdir(CACHE_ROOT, { recursive: true });
     await rm(partPath, { force: true });
 
@@ -162,6 +168,8 @@ export async function materializeRemoteEntry({ sources, entryPath, entry, iterat
         createdAt
       }) + "\n");
 
+      state.result = { key, dataPath, metaPath, partPath, size: total, createdAt, cacheHit: false };
+
       debugLog?.("remote entry cached", {
         entry: entryPath,
         size: total,
@@ -169,23 +177,86 @@ export async function materializeRemoteEntry({ sources, entryPath, entry, iterat
       });
 
       await cleanupRemoteCache();
-      return { key, dataPath, metaPath, partPath, size: total, createdAt, cacheHit: false };
+      return state.result;
     } catch (error) {
+      state.error = error;
       await rm(partPath, { force: true }).catch(() => {});
       await rm(metaPath, { force: true }).catch(() => {});
       await rm(dataPath, { force: true }).catch(() => {});
       throw error;
     } finally {
+      state.done = true;
       await closeIterator(iterator);
+      if (inflight.get(key) === state) inflight.delete(key);
     }
   })();
 
-  inflight.set(key, promise);
-  try {
-    return await promise;
-  } finally {
-    inflight.delete(key);
+  inflight.set(key, state);
+  return state;
+}
+
+export async function materializeRemoteEntry({ sources, entryPath, entry, iterator, total, debugLog }) {
+  const existing = await readValidCache(sources, entryPath);
+  if (existing) {
+    await closeIterator(iterator);
+    return existing;
   }
+
+  const state = startRemoteEntryMaterialization({
+    sources, entryPath, entry, iterator, total, debugLog
+  });
+  return state.promise;
+}
+
+export async function getRemoteMaterialization(sources, entryPath) {
+  return inflight.get(cacheKey(sources, entryPath)) || null;
+}
+
+export function createGrowingRangeStream(state, start, end) {
+  const stream = Readable.from((async function* () {
+    let position = start;
+
+    while (position <= end) {
+      if (state.error) throw state.error;
+
+      const pathToRead = state.done ? state.dataPath : state.partPath;
+      let available = 0;
+
+      try {
+        available = (await stat(pathToRead)).size;
+      } catch (error) {
+        if (state.done) {
+          if (state.error) throw state.error;
+          throw error;
+        }
+      }
+
+      if (available > position) {
+        const readEnd = Math.min(end, available - 1);
+        const reader = createReadStream(pathToRead, {
+          start: position,
+          end: readEnd
+        });
+
+        for await (const chunk of reader) {
+          yield chunk;
+          position += chunk.length;
+        }
+        continue;
+      }
+
+      if (state.done) {
+        if (position <= end) {
+          throw new Error(`Remote materialization ended before requested range: ${position}-${end}`);
+        }
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  })());
+
+  return stream;
 }
 
 async function closeIterator(iterator) {
