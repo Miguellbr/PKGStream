@@ -234,6 +234,11 @@ async function handleRemoteStream(req, res, url) {
       debugLog
     });
   } catch (error) {
+    debugLog("remote cache materialization failed", {
+      entry: entryPath,
+      name: error?.name || "Error",
+      error: error?.message || String(error)
+    });
     await closeRemoteRarIterator(found.iterator);
     return sendJson(res, 502, { error: error.message, name: error.name || "Error" });
   }
