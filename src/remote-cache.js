@@ -142,14 +142,10 @@ export function startRemoteEntryMaterialization({ sources, entryPath, entry, ite
   state.promise = (async () => {
     await mkdir(CACHE_ROOT, { recursive: true });
 
-    let existingBytes = 0;
-    try {
-      existingBytes = (await stat(partPath)).size;
-      if (existingBytes > total) {
-        await rm(partPath, { force: true });
-        existingBytes = 0;
-      }
-    } catch {}
+    // A leftover .part file is not trusted without a persisted integrity marker.
+    // Restart from zero so stale/corrupt partial data can never be served as valid.
+    await rm(partPath, { force: true }).catch(() => {});
+    const existingBytes = 0;
 
     const startedAt = performance.now();
     try {
@@ -229,7 +225,7 @@ export function startRemoteEntryMaterialization({ sources, entryPath, entry, ite
       debugLog?.("remote entry cached", {
         entry: entryPath,
         size: total,
-        resumedFrom: existingBytes,
+        resumedFrom: 0,
         ms: Math.round(performance.now() - startedAt)
       });
 
