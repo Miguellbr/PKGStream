@@ -350,44 +350,21 @@ async function handleStream(req, res, url) {
     return sendJson(res, 500, { error: "Archive backend did not provide a usable entry size" });
   }
 
-  const range = req.headers.range;
-  let start = 0;
-  let end = total - 1;
-
-  if (range) {
-    const match = range.match(/^bytes=(\d*)-(\d*)$/);
-    if (!match) {
-      res.writeHead(416, { "content-range": `bytes */${total}` });
-      return res.end();
-    }
-
-    if (match[1] === "") {
-      const suffix = Number(match[2]);
-      if (!Number.isSafeInteger(suffix) || suffix <= 0) {
-        res.writeHead(416, { "content-range": `bytes */${total}` });
-        return res.end();
-      }
-      start = Math.max(0, total - suffix);
-    } else {
-      start = Number(match[1]);
-      if (!Number.isSafeInteger(start) || start >= total) {
-        res.writeHead(416, { "content-range": `bytes */${total}` });
-        return res.end();
-      }
-      if (match[2] !== "") {
-        end = Math.min(total - 1, Number(match[2]));
-      }
-    }
+  const parsedRange = parseRange(req.headers.range, total);
+  if (!parsedRange) {
+    res.writeHead(416, { "content-range": `bytes */${total}` });
+    return res.end();
   }
 
+  const { start, end, partial } = parsedRange;
   const length = end - start + 1;
-  const status = range ? 206 : 200;
+  const status = partial ? 206 : 200;
 
   res.writeHead(status, {
     "content-type": "application/octet-stream",
     "accept-ranges": "bytes",
     "content-length": length,
-    "content-range": range ? `bytes ${start}-${end}/${total}` : undefined
+    ...(partial ? { "content-range": `bytes ${start}-${end}/${total}` } : {})
   });
 
   if (req.method === "HEAD") return res.end();
