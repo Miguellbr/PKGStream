@@ -118,21 +118,79 @@ async function handleRemoteList(url, res) {
   return sendJson(res, 200, { sources, entries });
 }
 
+async function streamCachedEntry(req, res, cache, total, entryPath) {
+  const range = parseRange(req.headers.range, total);
+  if (!range) {
+    res.writeHead(416, { "content-range": `bytes */${total}` });
+    return res.end();
+  }
+
+  const { start, end, partial } = range;
+  const length = end - start + 1;
+  res.writeHead(partial ? 206 : 200, {
+    "content-type": "application/octet-stream",
+    "accept-ranges": "bytes",
+    "content-length": length,
+    ...(partial ? { "content-range": `bytes ${start}-${end}/${total}` } : {})
+  });
+
+  if (req.method === "HEAD") return res.end();
+
+  const stream = createCachedRangeStream(cache, start, end);
+  const cleanup = () => {
+    if (!stream.destroyed) stream.destroy();
+  };
+
+  req.on("close", cleanup);
+  res.on("close", cleanup);
+
+  stream.on("error", (error) => {
+    cleanup();
+    if (!res.headersSent) sendJson(res, 500, { error: error.message });
+    else if (!res.writableEnded) res.destroy(error);
+  });
+
+  stream.on("end", () => {
+    if (!res.writableEnded) res.end();
+  });
+
+  stream.pipe(res);
+  debugLog("remote stream served from disk cache", {
+    entry: entryPath,
+    range: `${start}-${end}`,
+    cache: cache.dataPath
+  });
+}
+
 async function handleRemoteStream(req, res, url) {
   if (!ALLOW_REMOTE) return sendJson(res, 403, { error: "Remote sources are disabled. Set PKGSTREAM_ALLOW_REMOTE=1 to enable them." });
   const sources = getRemoteSources(url);
   const entryPath = url.searchParams.get("entry");
   if (!sources.length) return sendJson(res, 400, { error: "Missing source parameter" });
   if (!entryPath) return sendJson(res, 400, { error: "Missing entry parameter" });
+
+  const cached = await getRemoteCache(sources, entryPath);
+  if (cached) {
+    debugLog("remote cache hit", {
+      entry: entryPath,
+      size: cached.size,
+      cache: cached.dataPath
+    });
+    return streamCachedEntry(req, res, cached, cached.size, entryPath);
+  }
+
   const lookupStartedAt = performance.now();
   const found = await findRemoteRarEntry(sources, entryPath, { password: RAR_PASSWORD });
   const lookupMs = Math.round(performance.now() - lookupStartedAt);
   debugLog("remote entry lookup complete", { entry: entryPath, ms: lookupMs });
+
   if (!found) return sendJson(res, 404, { error: "Archive entry not found" });
+
   const total = readEntryValue(found.entry, "size");
   const compressedSize = readEntryValue(found.entry, "compressedSize");
   const compressionMethod = readEntryValue(found.entry, "compressionMethod");
   const solid = readEntryValue(found.entry, "isSolid");
+
   debugLog("remote entry metadata", {
     entry: entryPath,
     size: total,
@@ -140,27 +198,54 @@ async function handleRemoteStream(req, res, url) {
     compressionMethod,
     solid
   });
-  if (!Number.isSafeInteger(total) || total < 0) { await closeRemoteRarIterator(found.iterator); return sendJson(res, 500, { error: "RAR backend did not provide a usable entry size" }); }
-  const bodyStartedAt = performance.now();
-  const body = readEntryValue(found.entry, "body");
-  debugLog("remote entry body created", {
-    entry: entryPath,
-    ms: Math.round(performance.now() - bodyStartedAt)
-  });
-  if (!body || typeof body.getReader !== "function") {
-    await closeRemoteRarIterator(found.iterator);
-    return sendJson(res, 500, { error: "RAR backend did not provide a readable entry body" });
-  }
-  return streamWebEntry(
-    req,
-    res,
-    total,
-    body,
-    () => closeRemoteRarIterator(found.iterator),
-    { entry: entryPath }
-  );
-}
 
+  if (!Number.isSafeInteger(total) || total < 0) {
+    await closeRemoteRarIterator(found.iterator);
+    return sendJson(res, 500, { error: "RAR backend did not provide a usable entry size" });
+  }
+
+  if (req.method === "HEAD") {
+    await closeRemoteRarIterator(found.iterator);
+    const range = parseRange(req.headers.range, total);
+    if (!range) {
+      res.writeHead(416, { "content-range": `bytes */${total}` });
+      return res.end();
+    }
+    const { start, end, partial } = range;
+    res.writeHead(partial ? 206 : 200, {
+      "content-type": "application/octet-stream",
+      "accept-ranges": "bytes",
+      "content-length": end - start + 1,
+      ...(partial ? { "content-range": `bytes ${start}-${end}/${total}` } : {})
+    });
+    return res.end();
+  }
+
+  const cacheStartedAt = performance.now();
+  let cache;
+  try {
+    cache = await materializeRemoteEntry({
+      sources,
+      entryPath,
+      entry: found.entry,
+      iterator: found.iterator,
+      total,
+      debugLog
+    });
+  } catch (error) {
+    await closeRemoteRarIterator(found.iterator);
+    return sendJson(res, 502, { error: error.message, name: error.name || "Error" });
+  }
+
+  debugLog("remote cache ready", {
+    entry: entryPath,
+    cacheHit: cache.cacheHit,
+    size: cache.size,
+    ms: Math.round(performance.now() - cacheStartedAt)
+  });
+
+  return streamCachedEntry(req, res, cache, total, entryPath);
+}
 async function handleList(url, res) {
   const remote = await handleRemoteList(url, res);
   if (remote) return remote;
