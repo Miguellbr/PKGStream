@@ -130,6 +130,16 @@ async function handleRemoteStream(req, res, url) {
   debugLog("remote entry lookup complete", { entry: entryPath, ms: lookupMs });
   if (!found) return sendJson(res, 404, { error: "Archive entry not found" });
   const total = readEntryValue(found.entry, "size");
+  const compressedSize = readEntryValue(found.entry, "compressedSize");
+  const compressionMethod = readEntryValue(found.entry, "compressionMethod");
+  const solid = readEntryValue(found.entry, "isSolid");
+  debugLog("remote entry metadata", {
+    entry: entryPath,
+    size: total,
+    compressedSize,
+    compressionMethod,
+    solid
+  });
   if (!Number.isSafeInteger(total) || total < 0) { await closeRemoteRarIterator(found.iterator); return sendJson(res, 500, { error: "RAR backend did not provide a usable entry size" }); }
   const bodyStartedAt = performance.now();
   const body = readEntryValue(found.entry, "body");
