@@ -117,7 +117,6 @@ export async function cleanupRemoteCache() {
 }
 
 export async function getRemoteCache(sources, entryPath) {
-  await cleanupRemoteCache();
   return readValidCache(sources, entryPath);
 }
 
