@@ -12,6 +12,12 @@ const RAR_PASSWORD = process.env.PKGSTREAM_RAR_PASSWORD || undefined;
 const ALLOW_REMOTE = process.env.PKGSTREAM_ALLOW_REMOTE === "1";
 const DEBUG = process.env.PKGSTREAM_DEBUG === "1";
 
+const remoteEntryInflight = new Map();
+
+function remoteEntryKey(sources, entryPath) {
+  return JSON.stringify({ sources, entryPath });
+}
+
 function debugLog(message, data = {}) {
   if (DEBUG) console.error(`[PKGStream:debug] ${message}`, data);
 }
@@ -180,76 +186,80 @@ async function handleRemoteStream(req, res, url) {
     return streamCachedEntry(req, res, cached, cached.size, entryPath);
   }
 
-  const lookupStartedAt = performance.now();
-  const found = await findRemoteRarEntry(sources, entryPath, { password: RAR_PASSWORD });
-  const lookupMs = Math.round(performance.now() - lookupStartedAt);
-  debugLog("remote entry lookup complete", { entry: entryPath, ms: lookupMs });
+  const key = remoteEntryKey(sources, entryPath);
+  let cachePromise = remoteEntryInflight.get(key);
 
-  if (!found) return sendJson(res, 404, { error: "Archive entry not found" });
+  if (!cachePromise) {
+    cachePromise = (async () => {
+      const lookupStartedAt = performance.now();
+      const found = await findRemoteRarEntry(sources, entryPath, { password: RAR_PASSWORD });
+      const lookupMs = Math.round(performance.now() - lookupStartedAt);
+      debugLog("remote entry lookup complete", { entry: entryPath, ms: lookupMs });
 
-  const total = readEntryValue(found.entry, "size");
-  const compressedSize = readEntryValue(found.entry, "compressedSize");
-  const compressionMethod = readEntryValue(found.entry, "compressionMethod");
-  const solid = readEntryValue(found.entry, "isSolid");
+      if (!found) return null;
 
-  debugLog("remote entry metadata", {
-    entry: entryPath,
-    size: total,
-    compressedSize,
-    compressionMethod,
-    solid
-  });
+      const total = readEntryValue(found.entry, "size");
+      const compressedSize = readEntryValue(found.entry, "compressedSize");
+      const compressionMethod = readEntryValue(found.entry, "compressionMethod");
+      const solid = readEntryValue(found.entry, "isSolid");
 
-  if (!Number.isSafeInteger(total) || total < 0) {
-    await closeRemoteRarIterator(found.iterator);
-    return sendJson(res, 500, { error: "RAR backend did not provide a usable entry size" });
+      debugLog("remote entry metadata", {
+        entry: entryPath,
+        size: total,
+        compressedSize,
+        compressionMethod,
+        solid
+      });
+
+      if (!Number.isSafeInteger(total) || total < 0) {
+        await closeRemoteRarIterator(found.iterator);
+        throw new Error("RAR backend did not provide a usable entry size");
+      }
+
+      const cacheStartedAt = performance.now();
+      try {
+        const cache = await materializeRemoteEntry({
+          sources,
+          entryPath,
+          entry: found.entry,
+          iterator: found.iterator,
+          total,
+          debugLog
+        });
+
+        debugLog("remote cache ready", {
+          entry: entryPath,
+          cacheHit: cache.cacheHit,
+          size: cache.size,
+          ms: Math.round(performance.now() - cacheStartedAt)
+        });
+
+        return { cache, total };
+      } catch (error) {
+        await closeRemoteRarIterator(found.iterator);
+        throw error;
+      }
+    })();
+
+    remoteEntryInflight.set(key, cachePromise);
+    cachePromise.finally(() => remoteEntryInflight.delete(key)).catch(() => {});
   }
 
-  if (req.method === "HEAD") {
-    await closeRemoteRarIterator(found.iterator);
-    const range = parseRange(req.headers.range, total);
-    if (!range) {
-      res.writeHead(416, { "content-range": `bytes */${total}` });
-      return res.end();
-    }
-    const { start, end, partial } = range;
-    res.writeHead(partial ? 206 : 200, {
-      "content-type": "application/octet-stream",
-      "accept-ranges": "bytes",
-      "content-length": end - start + 1,
-      ...(partial ? { "content-range": `bytes ${start}-${end}/${total}` } : {})
-    });
-    return res.end();
-  }
-
-  const cacheStartedAt = performance.now();
-  let cache;
+  let ready;
   try {
-    cache = await materializeRemoteEntry({
-      sources,
-      entryPath,
-      entry: found.entry,
-      iterator: found.iterator,
-      total,
-      debugLog
-    });
+    ready = await cachePromise;
   } catch (error) {
     debugLog("remote cache materialization failed", {
       entry: entryPath,
       name: error?.name || "Error",
       error: error?.message || String(error)
     });
-    await closeRemoteRarIterator(found.iterator);
     return sendJson(res, 502, { error: error.message, name: error.name || "Error" });
   }
 
-  debugLog("remote cache ready", {
-    entry: entryPath,
-    cacheHit: cache.cacheHit,
-    size: cache.size,
-    ms: Math.round(performance.now() - cacheStartedAt)
-  });
+  if (!ready) return sendJson(res, 404, { error: "Archive entry not found" });
 
+  const { cache, total } = ready;
   return streamCachedEntry(req, res, cache, total, entryPath);
 }
 async function handleList(url, res) {
