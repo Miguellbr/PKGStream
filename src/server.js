@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import path from "node:path";
 import { listArchive, streamArchiveEntry, fileExists, safeResolve } from "./archive.js";
 import { listRemoteRar, findRemoteRarEntry, closeRemoteRarIterator, readEntryValue } from "./remote-rar.js";
-import { getRemoteCache, materializeRemoteEntry, createCachedRangeStream, getCacheRoot, cleanupRemoteCache, getCacheConfig } from "./remote-cache.js";
+import { getRemoteCache, startRemoteEntryMaterialization, createCachedRangeStream, createGrowingRangeStream, getCacheRoot, cleanupRemoteCache, getCacheConfig } from "./remote-cache.js";
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8080);
@@ -125,6 +125,60 @@ async function handleRemoteList(url, res) {
   return sendJson(res, 200, { sources, entries });
 }
 
+async function streamGrowingEntry(req, res, state, total, entryPath) {
+  const range = parseRange(req.headers.range, total);
+  if (!range) {
+    res.writeHead(416, { "content-range": `bytes */${total}` });
+    return res.end();
+  }
+
+  const { start, end, partial } = range;
+  const length = end - start + 1;
+  res.writeHead(partial ? 206 : 200, {
+    "content-type": "application/octet-stream",
+    "accept-ranges": "bytes",
+    "content-length": length,
+    ...(partial ? { "content-range": `bytes ${start}-${end}/${total}` } : {})
+  });
+
+  if (req.method === "HEAD") return res.end();
+
+  const stream = createGrowingRangeStream(state, start, end);
+  const cleanup = () => {
+    if (!stream.destroyed) stream.destroy();
+  };
+
+  req.on("close", cleanup);
+  res.on("close", cleanup);
+
+  let firstSentAt = null;
+  const startedAt = performance.now();
+
+  stream.on("data", (chunk) => {
+    if (firstSentAt === null && chunk.length > 0) {
+      firstSentAt = performance.now();
+      debugLog("remote progressive stream first bytes", {
+        entry: entryPath,
+        range: `${start}-${end}`,
+        msToFirstByte: Math.round(firstSentAt - startedAt),
+        skippedBytes: start
+      });
+    }
+  });
+
+  stream.on("error", (error) => {
+    cleanup();
+    if (!res.headersSent) sendJson(res, 502, { error: error.message });
+    else if (!res.writableEnded) res.destroy(error);
+  });
+
+  stream.on("end", () => {
+    if (!res.writableEnded) res.end();
+  });
+
+  stream.pipe(res);
+}
+
 async function streamCachedEntry(req, res, cache, total, entryPath) {
   const range = parseRange(req.headers.range, total);
   if (!range) {
@@ -216,9 +270,8 @@ async function handleRemoteStream(req, res, url) {
         throw new Error("RAR backend did not provide a usable entry size");
       }
 
-      const cacheStartedAt = performance.now();
       try {
-        const cache = await materializeRemoteEntry({
+        const state = startRemoteEntryMaterialization({
           sources,
           entryPath,
           entry: found.entry,
@@ -227,14 +280,13 @@ async function handleRemoteStream(req, res, url) {
           debugLog
         });
 
-        debugLog("remote cache ready", {
+        debugLog("remote progressive materialization started", {
           entry: entryPath,
-          cacheHit: cache.cacheHit,
-          size: cache.size,
-          ms: Math.round(performance.now() - cacheStartedAt)
+          size: total,
+          cache: state.partPath
         });
 
-        return { cache, total };
+        return { state, total };
       } catch (error) {
         await closeRemoteRarIterator(found.iterator);
         throw error;
@@ -258,6 +310,10 @@ async function handleRemoteStream(req, res, url) {
   }
 
   if (!ready) return sendJson(res, 404, { error: "Archive entry not found" });
+
+  if (ready.state) {
+    return streamGrowingEntry(req, res, ready.state, ready.total, entryPath);
+  }
 
   const { cache, total } = ready;
   return streamCachedEntry(req, res, cache, total, entryPath);
