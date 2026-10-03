@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { mkdir, rename, rm, stat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
