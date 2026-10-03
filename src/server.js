@@ -360,7 +360,8 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         service: "PKGStream",
         root: ROOT,
-        remoteRar: true
+        remoteRar: true,
+        cacheRoot: getCacheRoot()
       });
     }
 
