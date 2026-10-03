@@ -9,6 +9,11 @@ const PORT = Number(process.env.PORT || 8080);
 const ROOT = path.resolve(process.env.PKGSTREAM_ROOT || "./archives");
 const RAR_PASSWORD = process.env.PKGSTREAM_RAR_PASSWORD || undefined;
 const ALLOW_REMOTE = process.env.PKGSTREAM_ALLOW_REMOTE === "1";
+const DEBUG = process.env.PKGSTREAM_DEBUG === "1";
+
+function debugLog(message, data = {}) {
+  if (DEBUG) console.error(`[PKGStream:debug] ${message}`, data);
+}
 
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
@@ -59,7 +64,8 @@ function parseRange(range, total) {
   return { start, end, partial: true };
 }
 
-async function streamWebEntry(req, res, total, body, cleanup = async () => {}) {
+async function streamWebEntry(req, res, total, body, cleanup = async () => {}, debug = {}) {
+  const startedAt = performance.now();
   const range = parseRange(req.headers.range, total);
   if (!range) { await cleanup(); res.writeHead(416, { "content-range": "bytes */" + total }); return res.end(); }
   const { start, end, partial } = range;
@@ -71,10 +77,13 @@ async function streamWebEntry(req, res, total, body, cleanup = async () => {}) {
   if (req.method === "HEAD") { await cleanup(); return res.end(); }
   const reader = body.getReader();
   let position = 0, sent = 0;
+  let firstChunkAt = null;
+  let firstSentAt = null;
   try {
     while (sent < length) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (firstChunkAt === null) firstChunkAt = performance.now();
       const chunkStart = position, chunkEnd = position + value.byteLength - 1;
       position += value.byteLength;
       if (chunkEnd < start) continue;
@@ -84,6 +93,16 @@ async function streamWebEntry(req, res, total, body, cleanup = async () => {}) {
       const slice = value.subarray(from, to);
       if (!res.write(slice)) await new Promise((resolve) => res.once("drain", resolve));
       sent += slice.byteLength;
+      if (firstSentAt === null && slice.byteLength > 0) {
+        firstSentAt = performance.now();
+        debugLog("remote stream first bytes", {
+          entry: debug.entry,
+          range: `${start}-${end}`,
+          msToFirstChunk: Math.round(firstChunkAt - startedAt),
+          msToFirstByte: Math.round(firstSentAt - startedAt),
+          skippedBytes: start
+        });
+      }
     }
     await reader.cancel(); await cleanup(); if (!res.writableEnded) res.end();
   } catch (error) {
@@ -105,16 +124,31 @@ async function handleRemoteStream(req, res, url) {
   const entryPath = url.searchParams.get("entry");
   if (!sources.length) return sendJson(res, 400, { error: "Missing source parameter" });
   if (!entryPath) return sendJson(res, 400, { error: "Missing entry parameter" });
+  const lookupStartedAt = performance.now();
   const found = await findRemoteRarEntry(sources, entryPath, { password: RAR_PASSWORD });
+  const lookupMs = Math.round(performance.now() - lookupStartedAt);
+  debugLog("remote entry lookup complete", { entry: entryPath, ms: lookupMs });
   if (!found) return sendJson(res, 404, { error: "Archive entry not found" });
   const total = readEntryValue(found.entry, "size");
   if (!Number.isSafeInteger(total) || total < 0) { await closeRemoteRarIterator(found.iterator); return sendJson(res, 500, { error: "RAR backend did not provide a usable entry size" }); }
+  const bodyStartedAt = performance.now();
   const body = readEntryValue(found.entry, "body");
+  debugLog("remote entry body created", {
+    entry: entryPath,
+    ms: Math.round(performance.now() - bodyStartedAt)
+  });
   if (!body || typeof body.getReader !== "function") {
     await closeRemoteRarIterator(found.iterator);
     return sendJson(res, 500, { error: "RAR backend did not provide a readable entry body" });
   }
-  return streamWebEntry(req, res, total, body, () => closeRemoteRarIterator(found.iterator));
+  return streamWebEntry(
+    req,
+    res,
+    total,
+    body,
+    () => closeRemoteRarIterator(found.iterator),
+    { entry: entryPath }
+  );
 }
 
 async function handleList(url, res) {
