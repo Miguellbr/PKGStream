@@ -208,7 +208,7 @@ export async function materializeRemoteEntry({ sources, entryPath, entry, iterat
   return state.promise;
 }
 
-export async function getRemoteMaterialization(sources, entryPath) {
+export function getRemoteMaterialization(sources, entryPath) {
   return inflight.get(cacheKey(sources, entryPath)) || null;
 }
 
