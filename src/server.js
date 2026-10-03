@@ -377,7 +377,8 @@ const server = http.createServer(async (req, res) => {
         service: "PKGStream",
         root: ROOT,
         remoteRar: true,
-        cacheRoot: getCacheRoot()
+        cacheRoot: getCacheRoot(),
+        cache: getCacheConfig()
       });
     }
 
@@ -403,6 +404,10 @@ const server = http.createServer(async (req, res) => {
       name: error?.name || "Error"
     });
   }
+});
+
+cleanupRemoteCache().catch((error) => {
+  console.error("[PKGStream] cache cleanup failed", error);
 });
 
 server.listen(PORT, HOST, () => {
