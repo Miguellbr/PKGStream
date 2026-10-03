@@ -46,32 +46,39 @@ async function createReaders(urls) {
 export async function listRemoteRar(urls, options = {}) {
   const readers = await createReaders(urls);
   const source = readers.length === 1 ? readers[0] : readers;
-  const entries = [];
-  for await (const entry of unrar(source, options)) {
-    entries.push({
-      path: readEntryValue(entry, "filename"),
-      size: readEntryValue(entry, "size"),
-      directory: readEntryValue(entry, "isDirectory"),
-      compressedSize: readEntryValue(entry, "compressedSize"),
-      split: readEntryValue(entry, "isSplit"),
-      encrypted: readEntryValue(entry, "isEncrypted"),
-      solid: readEntryValue(entry, "isSolid")
-    });
+  const iterator = unrar(source, options);
+  try {
+    const entries = [];
+    for await (const entry of iterator) {
+      entries.push({
+        path: readEntryValue(entry, "filename"),
+        size: readEntryValue(entry, "size"),
+        directory: readEntryValue(entry, "isDirectory"),
+        compressedSize: readEntryValue(entry, "compressedSize"),
+        split: readEntryValue(entry, "isSplit"),
+        encrypted: readEntryValue(entry, "isEncrypted"),
+        solid: readEntryValue(entry, "isSolid")
+      });
+    }
+    return entries;
+  } finally {
+    await closeRemoteRarIterator(iterator);
   }
-  return entries;
 }
 
 export async function findRemoteRarEntry(urls, entryPath, options = {}) {
   const readers = await createReaders(urls);
   const source = readers.length === 1 ? readers[0] : readers;
   const iterator = unrar(source, options);
-  while (true) {
-    const result = await iterator.next();
-    if (result.done) {
-      await closeRemoteRarIterator(iterator);
-      return null;
+  try {
+    while (true) {
+      const result = await iterator.next();
+      if (result.done) return null;
+      if (!readEntryValue(result.value, "isDirectory") && readEntryValue(result.value, "filename") === entryPath) return { entry: result.value, iterator };
     }
-    if (!readEntryValue(result.value, "isDirectory") && readEntryValue(result.value, "filename") === entryPath) return { entry: result.value, iterator };
+  } catch (error) {
+    await closeRemoteRarIterator(iterator);
+    throw error;
   }
 }
 
