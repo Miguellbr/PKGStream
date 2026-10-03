@@ -181,8 +181,23 @@ export function startRemoteEntryMaterialization({ sources, entryPath, entry, ite
 
           if (!output.write(data)) {
             await new Promise((resolve, reject) => {
-              output.once("drain", resolve);
-              output.once("error", reject);
+              const onDrain = () => {
+                cleanup();
+                resolve();
+              };
+
+              const onError = (error) => {
+                cleanup();
+                reject(error);
+              };
+
+              const cleanup = () => {
+                output.off("drain", onDrain);
+                output.off("error", onError);
+              };
+
+              output.once("drain", onDrain);
+              output.once("error", onError);
             });
           }
         }
