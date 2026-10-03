@@ -3,6 +3,7 @@ import { URL } from "node:url";
 import path from "node:path";
 import { listArchive, streamArchiveEntry, fileExists, safeResolve } from "./archive.js";
 import { listRemoteRar, findRemoteRarEntry, closeRemoteRarIterator, readEntryValue } from "./remote-rar.js";
+import { getRemoteCache, materializeRemoteEntry, createCachedRangeStream, getCacheRoot } from "./remote-cache.js";
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8080);
