@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import path from "node:path";
 import { listArchive, streamArchiveEntry, fileExists, safeResolve } from "./archive.js";
 import { listRemoteRar, findRemoteRarEntry, closeRemoteRarIterator, readEntryValue } from "./remote-rar.js";
-import { getRemoteCache, startRemoteEntryMaterialization, createCachedRangeStream, createGrowingRangeStream, getCacheRoot, cleanupRemoteCache, getCacheConfig } from "./remote-cache.js";
+import { getRemoteCache, getRemoteMaterialization, startRemoteEntryMaterialization, createCachedRangeStream, createGrowingRangeStream, getCacheRoot, cleanupRemoteCache, getCacheConfig } from "./remote-cache.js";
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8080);
@@ -238,6 +238,16 @@ async function handleRemoteStream(req, res, url) {
       cache: cached.dataPath
     });
     return streamCachedEntry(req, res, cached, cached.size, entryPath);
+  }
+
+  const materializing = getRemoteMaterialization(sources, entryPath);
+  if (materializing) {
+    debugLog("remote progressive materialization joined", {
+      entry: entryPath,
+      size: materializing.size,
+      cache: materializing.partPath
+    });
+    return streamGrowingEntry(req, res, materializing, materializing.size, entryPath);
   }
 
   const key = remoteEntryKey(sources, entryPath);
