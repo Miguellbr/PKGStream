@@ -1,5 +1,8 @@
 import { fromFetch, unrar } from "@mary/rar";
 
+const MEDIAFIRE_CACHE_TTL_MS = 5 * 60 * 1000;
+const mediaFireCache = new Map();
+
 export function readEntryValue(entry, name) {
   const value = entry[name];
   return typeof value === "function" ? value.call(entry) : value;
@@ -15,6 +18,10 @@ export async function resolveRemoteSource(value) {
   const url = assertHttpUrl(value);
   if (!/^(www\.)?mediafire\.com$/i.test(url.hostname)) return url.toString();
 
+  const cacheKey = url.toString();
+  const cached = mediaFireCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.directUrl;
+
   const response = await fetch(url, { redirect: "follow" });
   if (!response.ok) throw new Error(`Remote source page returned HTTP ${response.status}`);
   const html = await response.text();
@@ -22,13 +29,17 @@ export async function resolveRemoteSource(value) {
   const matches = [...html.matchAll(/https?:\/\/download\d+\.mediafire\.com\/[^"\'<>\s]+/gi)];
   if (!matches.length) throw new Error("Could not resolve a direct MediaFire download URL");
 
-  return matches[0][0].replace(/&amp;/g, "&");
+  const directUrl = matches[0][0].replace(/&amp;/g, "&");
+  mediaFireCache.set(cacheKey, {
+    directUrl,
+    expiresAt: Date.now() + MEDIAFIRE_CACHE_TTL_MS
+  });
+  return directUrl;
 }
 
 async function createReaders(urls) {
   if (!urls.length) throw new Error("Missing remote archive source");
-  const resolved = [];
-  for (const value of urls) resolved.push(await resolveRemoteSource(value));
+  const resolved = await Promise.all(urls.map((value) => resolveRemoteSource(value)));
   return Promise.all(resolved.map((value) => fromFetch({ input: assertHttpUrl(value) })));
 }
 
@@ -56,7 +67,10 @@ export async function findRemoteRarEntry(urls, entryPath, options = {}) {
   const iterator = unrar(source, options);
   while (true) {
     const result = await iterator.next();
-    if (result.done) return null;
+    if (result.done) {
+      await closeRemoteRarIterator(iterator);
+      return null;
+    }
     if (!readEntryValue(result.value, "isDirectory") && readEntryValue(result.value, "filename") === entryPath) return { entry: result.value, iterator };
   }
 }
