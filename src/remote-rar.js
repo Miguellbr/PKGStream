@@ -1,5 +1,10 @@
 import { fromFetch, unrar } from "@mary/rar";
 
+function readEntryValue(entry, name) {
+  const value = entry[name];
+  return typeof value === "function" ? value.call(entry) : value;
+}
+
 function assertHttpUrl(value) {
   const url = new URL(value);
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Remote archive source must use HTTP or HTTPS");
@@ -32,7 +37,15 @@ export async function listRemoteRar(urls, options = {}) {
   const source = readers.length === 1 ? readers[0] : readers;
   const entries = [];
   for await (const entry of unrar(source, options)) {
-    entries.push({ path: entry.filename(), size: entry.size(), directory: entry.isDirectory(), compressedSize: entry.compressedSize(), split: entry.isSplit(), encrypted: entry.isEncrypted(), solid: entry.isSolid() });
+    entries.push({
+      path: readEntryValue(entry, "filename"),
+      size: readEntryValue(entry, "size"),
+      directory: readEntryValue(entry, "isDirectory"),
+      compressedSize: readEntryValue(entry, "compressedSize"),
+      split: readEntryValue(entry, "isSplit"),
+      encrypted: readEntryValue(entry, "isEncrypted"),
+      solid: readEntryValue(entry, "isSolid")
+    });
   }
   return entries;
 }
@@ -44,7 +57,7 @@ export async function findRemoteRarEntry(urls, entryPath, options = {}) {
   while (true) {
     const result = await iterator.next();
     if (result.done) return null;
-    if (!result.value.isDirectory() && result.value.filename() === entryPath) return { entry: result.value, iterator };
+    if (!readEntryValue(result.value, "isDirectory") && readEntryValue(result.value, "filename") === entryPath) return { entry: result.value, iterator };
   }
 }
 
