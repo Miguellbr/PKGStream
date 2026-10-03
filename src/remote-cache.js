@@ -72,37 +72,9 @@ export async function materializeRemoteEntry({ sources, entryPath, entry, iterat
         throw new Error("RAR backend did not provide a readable entry body");
       }
 
-      const reader = body.getReader();
       const output = createWriteStream(partPath, { flags: "wx" });
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!value?.byteLength) continue;
-
-          if (!output.write(Buffer.from(value))) {
-            await new Promise((resolve, reject) => {
-              const onDrain = () => { cleanup(); resolve(); };
-              const onError = (error) => { cleanup(); reject(error); };
-              const cleanup = () => {
-                output.off("drain", onDrain);
-                output.off("error", onError);
-              };
-              output.once("drain", onDrain);
-              output.once("error", onError);
-            });
-          }
-          written += value.byteLength;
-        }
-      } finally {
-        try { await reader.cancel(); } catch {}
-        output.end();
-        await new Promise((resolve, reject) => {
-          output.once("finish", resolve);
-          output.once("error", reject);
-        });
-      }
+      await pipeline(Readable.fromWeb(body), output);
+      written = (await stat(partPath)).size;
 
       if (written !== total) {
         throw new Error(`Cached entry size mismatch: expected ${total}, got ${written}`);
