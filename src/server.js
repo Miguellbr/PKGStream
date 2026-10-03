@@ -2,7 +2,7 @@ import http from "node:http";
 import { URL } from "node:url";
 import path from "node:path";
 import { listArchive, streamArchiveEntry, fileExists, safeResolve } from "./archive.js";
-import { listRemoteRar, findRemoteRarEntry, closeRemoteRarIterator } from "./remote-rar.js";
+import { listRemoteRar, findRemoteRarEntry, closeRemoteRarIterator, readEntryValue } from "./remote-rar.js";
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8080);
@@ -29,7 +29,6 @@ async function getArchive(requested) {
   }
   return archivePath;
 }
-
 
 function getRemoteSources(url) {
   const sources = url.searchParams.getAll("source");
@@ -108,9 +107,14 @@ async function handleRemoteStream(req, res, url) {
   if (!entryPath) return sendJson(res, 400, { error: "Missing entry parameter" });
   const found = await findRemoteRarEntry(sources, entryPath, { password: RAR_PASSWORD });
   if (!found) return sendJson(res, 404, { error: "Archive entry not found" });
-  const total = found.entry.size();
+  const total = readEntryValue(found.entry, "size");
   if (!Number.isSafeInteger(total) || total < 0) { await closeRemoteRarIterator(found.iterator); return sendJson(res, 500, { error: "RAR backend did not provide a usable entry size" }); }
-  return streamWebEntry(req, res, total, found.entry.body(), () => closeRemoteRarIterator(found.iterator));
+  const body = readEntryValue(found.entry, "body");
+  if (!body || typeof body.getReader !== "function") {
+    await closeRemoteRarIterator(found.iterator);
+    return sendJson(res, 500, { error: "RAR backend did not provide a readable entry body" });
+  }
+  return streamWebEntry(req, res, total, body, () => closeRemoteRarIterator(found.iterator));
 }
 
 async function handleList(url, res) {
